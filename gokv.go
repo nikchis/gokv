@@ -13,7 +13,7 @@ const (
 )
 
 type Store struct {
-	sync.RWMutex
+	mtx             sync.RWMutex
 	items           map[string]Item
 	expDuration     time.Duration
 	checkInterval   time.Duration
@@ -61,9 +61,9 @@ func NewCustom(DefaultExpDuration, CheckInterval time.Duration) *Store {
 
 // SetVal sets value
 func (s *Store) SetVal(Key string, Value interface{}) {
-	s.Lock()
+	s.mtx.Lock()
 	if s.closed {
-		s.Unlock()
+		s.mtx.Unlock()
 		return
 	}
 	s.items[Key] = Item{
@@ -71,7 +71,7 @@ func (s *Store) SetVal(Key string, Value interface{}) {
 		ExpTime: time.Now().Add(s.expDuration).UnixNano(),
 		Created: time.Now(),
 	}
-	s.Unlock()
+	s.mtx.Unlock()
 }
 
 // SetValWithCustomExp sets value with customized expiration
@@ -82,9 +82,9 @@ func (s *Store) SetValWithCustomExp(Key string, Value interface{}, Expiration ti
 	} else {
 		exp = time.Now().Add(s.expDuration).UnixNano()
 	}
-	s.Lock()
+	s.mtx.Lock()
 	if s.closed {
-		s.Unlock()
+		s.mtx.Unlock()
 		return
 	}
 	s.items[Key] = Item{
@@ -92,18 +92,18 @@ func (s *Store) SetValWithCustomExp(Key string, Value interface{}, Expiration ti
 		ExpTime: exp,
 		Created: time.Now(),
 	}
-	s.Unlock()
+	s.mtx.Unlock()
 }
 
 // GetVal returns value
 func (s *Store) GetVal(Key string) (interface{}, bool) {
-	s.RLock()
+	s.mtx.RLock()
 	if s.closed {
-		s.RUnlock()
+		s.mtx.RUnlock()
 		return nil, false
 	}
 	item, found := s.items[Key]
-	s.RUnlock()
+	s.mtx.RUnlock()
 	if !found {
 		return nil, false
 	}
@@ -117,36 +117,36 @@ func (s *Store) GetVal(Key string) (interface{}, bool) {
 
 // Delete deletes value
 func (s *Store) Delete(Key string) {
-	s.RLock()
+	s.mtx.RLock()
 	if s.closed {
-		s.RUnlock()
+		s.mtx.RUnlock()
 		return
 	}
-	s.RUnlock()
-	s.Lock()
+	s.mtx.RUnlock()
+	s.mtx.Lock()
 	delete(s.items, Key)
-	s.Unlock()
+	s.mtx.Unlock()
 }
 
 // Close gracefully closes the Store
 func (s *Store) Close() {
-	s.RLock()
+	s.mtx.RLock()
 	if s.closed {
-		s.RUnlock()
+		s.mtx.RUnlock()
 		return
 	}
-	s.RUnlock()
+	s.mtx.RUnlock()
 	if s.checkInterval > 0 {
 		s.stopChecking <- true
 		s.wg.Wait()
 	}
-	s.Lock()
+	s.mtx.Lock()
 	if s.items != nil {
 		for k := range s.items {
 			delete(s.items, k)
 		}
 	}
-	s.Unlock()
+	s.mtx.Unlock()
 	if s.freeMemInterval > 0 {
 		debug.FreeOSMemory()
 	}
@@ -155,9 +155,9 @@ func (s *Store) Close() {
 
 // SetFreeMemInterval sets the min interval for execution of debug.FreeOSMemory
 func (s *Store) SetFreeMemInterval(NewFreeMemInterval time.Duration) {
-	s.Lock()
+	s.mtx.Lock()
 	s.freeMemInterval = NewFreeMemInterval
-	s.Unlock()
+	s.mtx.Unlock()
 }
 
 func (s *Store) startCheckingExpired() {
@@ -170,20 +170,20 @@ func (s *Store) startCheckingExpired() {
 			select {
 			case <-time.After(s.checkInterval):
 				timeNow = time.Now().UnixNano()
-				s.Lock()
+				s.mtx.Lock()
 				for k := range s.items {
 					if timeNow > s.items[k].ExpTime && s.items[k].ExpTime > 0 {
 						delete(s.items, k)
 					}
 				}
-				s.Unlock()
-				s.RLock()
+				s.mtx.Unlock()
+				s.mtx.RLock()
 				if s.freeMemInterval > 0 &&
 					timeFreeMemTS < timeNow-s.freeMemInterval.Nanoseconds() {
 					timeFreeMemTS = timeNow
 					debug.FreeOSMemory()
 				}
-				s.RUnlock()
+				s.mtx.RUnlock()
 			case <-s.stopChecking:
 				close(s.stopChecking)
 				return
